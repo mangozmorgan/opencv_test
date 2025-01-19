@@ -1,85 +1,114 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/videoio.hpp> 
+#include <opencv2/videoio.hpp>
+#include <opencv2/objdetect.hpp>
 
 // Fonction pour détecter les coordonnées de la balle dans l'image
-void findTheBall(const cv::Mat &src, cv::Point2d &startPoint, cv::Point2d &endPoint)
+void findTheBall(const cv::Mat &mask, cv::Point2d &center, cv::Rect &boundingBox)
 {
-    // Récupère la taille de l'image
-    cv::Size imgSize = src.size();
-    int hmax = 0, hmin = imgSize.height, wmax = 0, wmin = imgSize.width;
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    // Parcourt chaque pixel de l'image
-    for (int i = 0; i < imgSize.height; i++)
+    double maxArea = 0;
+    int largestContourIndex = -1;
+
+    for (size_t i = 0; i < contours.size(); i++)
     {
-        for (int j = 0; j < imgSize.width; j++)
+        double area = cv::contourArea(contours[i]);
+        if (area > maxArea)
         {
-            // Si le pixel est blanc (valeur 255), cela signifie que c'est une partie de la balle
-            if (src.at<uchar>(i, j) == 255)
-            {
-                // Met à jour les coordonnées du rectangle englobant
-                if (i < hmin)
-                    hmin = i;
-                if (i > hmax)
-                    hmax = i;
-                if (j < wmin)
-                    wmin = j;
-                if (j > wmax)
-                    wmax = j;
-            }
+            maxArea = area;
+            largestContourIndex = i;
         }
     }
 
-    // Assigne les coordonnées du rectangle à startPoint et endPoint
-    startPoint.x = wmin;
-    startPoint.y = hmin;
-    endPoint.x = wmax;
-    endPoint.y = hmax;
+    if (largestContourIndex != -1)
+    {
+        boundingBox = cv::boundingRect(contours[largestContourIndex]);
+        center.x = boundingBox.x + boundingBox.width / 2.0;
+        center.y = boundingBox.y + boundingBox.height / 2.0;
+    }
+    else
+    {
+        center = cv::Point2d(-1, -1);
+        boundingBox = cv::Rect();
+    }
+}
+
+// Fonction pour détecter les personnes dans le frame
+void findPeople(const cv::Mat &frame, std::vector<cv::Rect> &people)
+{
+    cv::HOGDescriptor hog;
+    hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
+    hog.detectMultiScale(frame, people, 0, cv::Size(8, 8), cv::Size(16, 16), 1.05, 2);
 }
 
 int main()
 {
-    // Ouverture du fichier vidéo
-    cv::VideoCapture vidCap("./BouncingBall.mp4");
-    cv::Mat frame, frameHSV, mask;
+    cv::VideoCapture vidCap("./people.mp4");
+    if (!vidCap.isOpened())
+    {
+        std::cerr << "Erreur : Impossible de lire la vidéo." << std::endl;
+        return -1;
+    }
 
-    // Points de départ et d'arrivée du rectangle englobant la balle
-    cv::Point2d stPoint, enPoint;
+    cv::Mat frame, resizedFrame, frameHSV, mask;
+    cv::Point2d ballCenter;
+    cv::Rect ballBoundingBox;
 
-    // Plage des valeurs HSV pour la détection de la balle
     const int hmin = 0, smin = 50, vmin = 0;
-    const int hmax = 179, smax = 255, vmax = 255;
+    const int hmax = 30, smax = 255, vmax = 255;
 
-    unsigned int i = 0;
-    // Boucle pour lire et traiter chaque image de la vidéo
+    const int targetWidth = 800;
+    const int targetHeight = 600;
+
     while (true)
     {
-        vidCap.read(frame); // Lecture d'une nouvelle image
+        vidCap.read(frame);
+        if (frame.empty())
+            break;
 
-        // Conversion de l'image de BGR en HSV
-        cv::cvtColor(frame, frameHSV, cv::COLOR_BGR2HSV);
-        
-        // Création d'un masque avec les valeurs HSV définies
+        // Redimensionnement de l'image
+        double scaleX = (double)targetWidth / frame.cols;
+        double scaleY = (double)targetHeight / frame.rows;
+        cv::resize(frame, resizedFrame, cv::Size(targetWidth, targetHeight));
+
+        // Détection des personnes
+        std::vector<cv::Rect> people;
+        findPeople(resizedFrame, people);
+        for (const auto &person : people)
+        {
+            cv::rectangle(resizedFrame, person, cv::Scalar(255, 0, 0), 2);
+        }
+
+        // Conversion en HSV et création du masque
+        cv::cvtColor(resizedFrame, frameHSV, cv::COLOR_BGR2HSV);
         cv::inRange(frameHSV, cv::Scalar(hmin, smin, vmin), cv::Scalar(hmax, smax, vmax), mask);
 
-        // Détection de la balle en fonction du masque
-        findTheBall(mask, stPoint, enPoint);
+        // Nettoyage du masque pour réduire le bruit
+        cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), 2);
+        cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 2);
 
-        // Dessin du rectangle autour de la balle détectée
-        cv::rectangle(frame, stPoint, enPoint, cv::Scalar(100, 255, 0), 3);
+        // Détection de la balle
+        // findTheBall(mask, ballCenter, ballBoundingBox);
 
-        // Affichage du frame avec le rectangle
-        cv::imshow("video", frame);
-        cv::waitKey(30); // Attente de 30ms pour l'affichage de l'image
+        // Dessin des résultats de la détection de la balle
+        // if (ballCenter.x != -1 && ballCenter.y != -1)
+        // {
+        //     cv::rectangle(resizedFrame, ballBoundingBox, cv::Scalar(0, 255, 0), 2);
+        //     cv::circle(resizedFrame, ballCenter, 5, cv::Scalar(0, 0, 255), -1);
+        // }
 
-        i++;
-        // Limitation du nombre d'images à traiter
-        if (i >= 100)
+        // Affichage
+        cv::imshow("video", resizedFrame);
+        // cv::imshow("mask", mask);
+
+        if (cv::waitKey(30) >= 0)
             break;
     }
 
-    // Libération de la vidéo et fermeture des fenêtres
     vidCap.release();
     cv::destroyAllWindows();
+    return 0;
 }
