@@ -12,3 +12,5 @@ g++ -o main main.cpp -I C:/opencv-4.11.0/build/install/include -L C:/opencv-4.11
 Run main.exe, and you should see a green rectangle surrounding a circle. ✅
 
 Enjoy your first OpenCV test in C++! 🎉
+
+credits for project : https://github.com/mhmokhtarabadi
